@@ -64,6 +64,7 @@ func main() {
 
 	serveMux.HandleFunc("GET /api/healthz", healthHandler)
 	serveMux.HandleFunc("GET /api/chirps", apiCfg.getChirpsHandler)
+	serveMux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getChirpHandler)
 	serveMux.HandleFunc("POST /api/chirps", apiCfg.createChirpHandler)
 	serveMux.HandleFunc("POST /api/users", apiCfg.userHandler)
 
@@ -220,6 +221,30 @@ func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, req *http.Request)
 	respondWithJSON(w, http.StatusOK, chirps)
 }
 
+func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, req *http.Request) {
+	chirpID, err := uuid.Parse(req.PathValue("chirpID"))
+	if err != nil {
+		fmt.Printf("getChirpHandler: error parsing chirp from endpoint: %v", err)
+		respondWithError(w, http.StatusInternalServerError, "something went wrong")
+		return
+	}
+
+	dbChirp, err := cfg.db.GetChirp(req.Context(), chirpID)
+	if err != nil {
+		fmt.Printf("getChirpHandler: error querying for chirp: %v", err)
+		respondWithError(w, http.StatusNotFound, "chirp not found")
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, Chirp{
+		ID:        dbChirp.ID,
+		CreatedAt: dbChirp.CreatedAt,
+		UpdatedAt: dbChirp.UpdatedAt,
+		Body:      dbChirp.Body,
+		UserID:    dbChirp.UserID,
+	})
+}
+
 func respondWithError(w http.ResponseWriter, code int, msg string) {
 	type errorResp struct {
 		Error string `json:"error"`
@@ -230,7 +255,6 @@ func respondWithError(w http.ResponseWriter, code int, msg string) {
 	}
 
 	w.Header().Add("Content-Type", "application/json")
-
 	errMsg, err := json.Marshal(errorBody)
 	if err != nil {
 		fmt.Printf("error during respondWithError: %v\n", err)
