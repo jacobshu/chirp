@@ -30,6 +30,14 @@ type User struct {
 	Email     string    `json:"email"`
 }
 
+type Chirp struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body      string    `json:"body"`
+	UserID    uuid.UUID `json:"user_id"`
+}
+
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
@@ -55,7 +63,7 @@ func main() {
 	}
 
 	serveMux.HandleFunc("GET /api/healthz", healthHandler)
-	serveMux.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
+	serveMux.HandleFunc("POST /api/chirps", apiCfg.chirpHandler)
 	serveMux.HandleFunc("POST /api/users", apiCfg.userHandler)
 
 	serveMux.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
@@ -129,13 +137,10 @@ func (cfg *apiConfig) userHandler(w http.ResponseWriter, req *http.Request) {
 	respondWithJSON(w, http.StatusCreated, usrData)
 }
 
-func validateChirpHandler(w http.ResponseWriter, req *http.Request) {
+func (cfg *apiConfig) chirpHandler(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
-		Body string `json:"body"`
-	}
-
-	type successResp struct {
-		CleanedBody string `json:"cleaned_body"`
+		Body   string `json:"body"`
+		UserID string `json:"user_id"`
 	}
 
 	decoder := json.NewDecoder(req.Body)
@@ -164,8 +169,30 @@ func validateChirpHandler(w http.ResponseWriter, req *http.Request) {
 		}
 		clean := strings.Join(sanitized, " ")
 
-		respondWithJSON(w, http.StatusOK, successResp{
-			CleanedBody: clean,
+		params.Body = clean
+		user_id, err := uuid.Parse(params.UserID)
+		if err != nil {
+			fmt.Printf("chirpHandler: error in parsing user_id: %v", err)
+			respondWithError(w, http.StatusInternalServerError, "something went wrong")
+			return
+		}
+
+		dbChirp, err := cfg.db.CreateChirp(req.Context(), database.CreateChirpParams{
+			Body:   clean,
+			UserID: user_id,
+		})
+		if err != nil {
+			fmt.Printf("chirpHandler: error inserting new chirp: %v", err)
+			respondWithError(w, http.StatusInternalServerError, "something went wrong")
+			return
+		}
+
+		respondWithJSON(w, http.StatusCreated, Chirp{
+			ID:        dbChirp.ID,
+			CreatedAt: dbChirp.CreatedAt,
+			UpdatedAt: dbChirp.UpdatedAt,
+			Body:      clean,
+			UserID:    dbChirp.UserID,
 		})
 	}
 }
