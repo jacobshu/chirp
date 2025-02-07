@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jacobshu/chirp/internal/auth"
 	"github.com/jacobshu/chirp/internal/database"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
@@ -67,6 +68,7 @@ func main() {
 	serveMux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getChirpHandler)
 	serveMux.HandleFunc("POST /api/chirps", apiCfg.createChirpHandler)
 	serveMux.HandleFunc("POST /api/users", apiCfg.userHandler)
+	serveMux.HandleFunc("POST /api/login", apiCfg.loginHandler)
 
 	serveMux.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
 	serveMux.HandleFunc("POST /admin/reset", apiCfg.resetHandler)
@@ -110,7 +112,8 @@ func healthHandler(w http.ResponseWriter, req *http.Request) {
 
 func (cfg *apiConfig) userHandler(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	decoder := json.NewDecoder(req.Body)
@@ -122,21 +125,65 @@ func (cfg *apiConfig) userHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	user, err := cfg.db.CreateUser(req.Context(), params.Email)
-	usrData := User{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
+	hashedPass, err := auth.HashPassword(params.Password)
+	if err != nil {
+		fmt.Printf("userHandler: error hashing user password: %v", err)
+		respondWithError(w, http.StatusInternalServerError, "something went wrong")
+		return
 	}
 
+	user, err := cfg.db.CreateUser(req.Context(), database.CreateUserParams{
+		Email:          params.Email,
+		HashedPassword: hashedPass,
+	})
 	if err != nil {
 		fmt.Printf("error during query: %v\n", err)
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
 		return
 	}
 
-	respondWithJSON(w, http.StatusCreated, usrData)
+	respondWithJSON(w, http.StatusCreated, User{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	})
+}
+
+func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
+	type parameters struct {
+		Password string `json:"password"`
+		Email    string `json:"email"`
+	}
+
+	decoder := json.NewDecoder(req.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		fmt.Printf("loginHandler: error decoding parameters: %v", err)
+		respondWithError(w, http.StatusInternalServerError, "something went wrong")
+		return
+	}
+
+	dbUser, err := cfg.db.GetUserByEmail(req.Context(), params.Email)
+	if err != nil {
+		fmt.Printf("loginHandler: error querying user: %v", err)
+		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password")
+		return
+	}
+
+	err = auth.CheckPasswordHash(params.Password, dbUser.HashedPassword)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password")
+	} else {
+		respondWithJSON(w, http.StatusOK, User{
+			ID:        dbUser.ID,
+			CreatedAt: dbUser.CreatedAt,
+			UpdatedAt: dbUser.UpdatedAt,
+			Email:     dbUser.Email,
+		})
+	}
+
 }
 
 func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Request) {
