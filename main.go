@@ -22,6 +22,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
 	platform       string
+	auth           auth.Service
 }
 
 type User struct {
@@ -58,9 +59,18 @@ func main() {
 	}
 
 	fmt.Print("starting server...\n")
+	authService, err := auth.NewAuthService(auth.Config{
+		SigningKey: []byte("hiyaka-men"),
+		BcryptCost: 10,
+	})
+	if err != nil {
+		fmt.Printf("error creating auth service: %v", err)
+	}
+
 	apiCfg := apiConfig{
 		db:       dbQueries,
 		platform: platform,
+		auth:     *authService,
 	}
 
 	serveMux.HandleFunc("GET /api/healthz", healthHandler)
@@ -125,7 +135,7 @@ func (cfg *apiConfig) userHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	hashedPass, err := auth.HashPassword(params.Password)
+	hashedPass, err := cfg.auth.HashPassword(params.Password)
 	if err != nil {
 		fmt.Printf("userHandler: error hashing user password: %v", err)
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
@@ -172,7 +182,7 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	err = auth.CheckPasswordHash(params.Password, dbUser.HashedPassword)
+	err = cfg.auth.CheckPasswordHash(params.Password, dbUser.HashedPassword)
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password")
 	} else {
