@@ -23,6 +23,7 @@ type apiConfig struct {
 	db             *database.Queries
 	platform       string
 	auth           auth.Service
+	signingKey     string
 }
 
 type User struct {
@@ -30,6 +31,7 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+	Token     string    `json:"token"`
 }
 
 type Chirp struct {
@@ -44,10 +46,11 @@ func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
 	platform := os.Getenv("PLATFORM")
+	key := os.Getenv("TOKEN_STRING")
 
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
-		fmt.Printf("error loading postgres: %v", err)
+		fmt.Printf("error loading postgres: %v\n", err)
 	}
 
 	dbQueries := database.New(db)
@@ -64,13 +67,14 @@ func main() {
 		BcryptCost: 10,
 	})
 	if err != nil {
-		fmt.Printf("error creating auth service: %v", err)
+		fmt.Printf("error creating auth service: %v\n", err)
 	}
 
 	apiCfg := apiConfig{
-		db:       dbQueries,
-		platform: platform,
-		auth:     *authService,
+		db:         dbQueries,
+		platform:   platform,
+		auth:       *authService,
+		signingKey: key,
 	}
 
 	serveMux.HandleFunc("GET /api/healthz", healthHandler)
@@ -87,7 +91,7 @@ func main() {
 	serveMux.Handle("/app/", apiCfg.middlewareMetricsInc(fileServerHandler))
 
 	if err := server.ListenAndServe(); err != nil {
-		fmt.Printf("error during serve: %v", err)
+		fmt.Printf("error during serve: %v\n", err)
 	}
 
 }
@@ -137,7 +141,7 @@ func (cfg *apiConfig) userHandler(w http.ResponseWriter, req *http.Request) {
 
 	hashedPass, err := cfg.auth.HashPassword(params.Password)
 	if err != nil {
-		fmt.Printf("userHandler: error hashing user password: %v", err)
+		fmt.Printf("userHandler: error hashing user password: %v\n", err)
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
 		return
 	}
@@ -162,22 +166,23 @@ func (cfg *apiConfig) userHandler(w http.ResponseWriter, req *http.Request) {
 
 func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
-		Password string `json:"password"`
-		Email    string `json:"email"`
+		Password  string `json:"password"`
+		Email     string `json:"email"`
+		ExpiresIn int    `json:"expires_in_seconds"`
 	}
 
 	decoder := json.NewDecoder(req.Body)
 	params := parameters{}
 	err := decoder.Decode(&params)
 	if err != nil {
-		fmt.Printf("loginHandler: error decoding parameters: %v", err)
+		fmt.Printf("loginHandler: error decoding parameters: %v\n", err)
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
 		return
 	}
 
 	dbUser, err := cfg.db.GetUserByEmail(req.Context(), params.Email)
 	if err != nil {
-		fmt.Printf("loginHandler: error querying user: %v", err)
+		fmt.Printf("loginHandler: error querying user: %v\n", err)
 		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password")
 		return
 	}
@@ -186,11 +191,25 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password")
 	} else {
+		var expiry int
+		if params.ExpiresIn > 0 && params.ExpiresIn < 3600 {
+			expiry = params.ExpiresIn
+		} else {
+			expiry = 3600
+		}
+
+		fmt.Printf("EXPIRES>>>>%v becomes %v\n", expiry, time.Duration(expiry)*time.Second)
+		token, err := cfg.auth.MakeJWT(dbUser.ID, time.Duration(expiry))
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "something went wrong")
+		}
+
 		respondWithJSON(w, http.StatusOK, User{
 			ID:        dbUser.ID,
 			CreatedAt: dbUser.CreatedAt,
 			UpdatedAt: dbUser.UpdatedAt,
 			Email:     dbUser.Email,
+			Token:     token,
 		})
 	}
 
@@ -198,8 +217,7 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
 
 func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
-		Body   string `json:"body"`
-		UserID string `json:"user_id"`
+		Body string `json:"body"`
 	}
 
 	decoder := json.NewDecoder(req.Body)
@@ -209,6 +227,15 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Reques
 		fmt.Printf("error during param decode: %v\n", err)
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
 		return
+	}
+
+	token, err := cfg.auth.GetBearerToken(req.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "")
+	}
+	user_id, err := cfg.auth.ValidateJWT(token)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "")
 	}
 
 	if len(params.Body) > 140 {
@@ -228,20 +255,12 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Reques
 		}
 		clean := strings.Join(sanitized, " ")
 
-		params.Body = clean
-		user_id, err := uuid.Parse(params.UserID)
-		if err != nil {
-			fmt.Printf("createChirpHandler: error in parsing user_id: %v", err)
-			respondWithError(w, http.StatusInternalServerError, "something went wrong")
-			return
-		}
-
 		dbChirp, err := cfg.db.CreateChirp(req.Context(), database.CreateChirpParams{
 			Body:   clean,
 			UserID: user_id,
 		})
 		if err != nil {
-			fmt.Printf("createChirpHandler: error inserting new chirp: %v", err)
+			fmt.Printf("createChirpHandler: error inserting new chirp: %v\n", err)
 			respondWithError(w, http.StatusInternalServerError, "something went wrong")
 			return
 		}
@@ -259,7 +278,7 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Reques
 func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, req *http.Request) {
 	dbChirps, err := cfg.db.GetAllChirps(req.Context())
 	if err != nil {
-		fmt.Printf("getChirpsHandler: error querying for chirps: %v", err)
+		fmt.Printf("getChirpsHandler: error querying for chirps: %v\n", err)
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
 		return
 	}
@@ -281,14 +300,14 @@ func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, req *http.Request)
 func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, req *http.Request) {
 	chirpID, err := uuid.Parse(req.PathValue("chirpID"))
 	if err != nil {
-		fmt.Printf("getChirpHandler: error parsing chirp from endpoint: %v", err)
+		fmt.Printf("getChirpHandler: error parsing chirp from endpoint: %v\n", err)
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
 		return
 	}
 
 	dbChirp, err := cfg.db.GetChirp(req.Context(), chirpID)
 	if err != nil {
-		fmt.Printf("getChirpHandler: error querying for chirp: %v", err)
+		fmt.Printf("getChirpHandler: error querying for chirp: %v\n", err)
 		respondWithError(w, http.StatusNotFound, "chirp not found")
 		return
 	}

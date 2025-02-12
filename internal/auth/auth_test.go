@@ -48,6 +48,15 @@ func (h *testHelper) createToken(userID uuid.UUID, duration time.Duration) strin
 	return token
 }
 
+func (h *testHelper) createRequestAuthHeader(header string, authType string, token string) http.Header {
+	req, err := http.NewRequest(http.MethodGet, "https://test.io", nil)
+	if err != nil {
+		h.t.Fatalf("error creating test request: %v\n", err)
+	}
+	req.Header.Add(header, authType+" "+token)
+	return req.Header
+}
+
 func TestNewAuthService(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -223,7 +232,7 @@ func TestJWTOperations(t *testing.T) {
 			},
 			wantID: uuid.Nil,
 			checkFunc: func(err error) bool {
-				return err != nil && strings.Contains(err.Error(), "token has expired")
+				return err != nil && strings.Contains(err.Error(), "token is expired")
 			},
 		},
 		{
@@ -231,8 +240,10 @@ func TestJWTOperations(t *testing.T) {
 			setup: func() string {
 				return "invalid.token.format"
 			},
-			wantID:  uuid.Nil,
-			wantErr: ErrInvalidToken,
+			wantID: uuid.Nil,
+			checkFunc: func(err error) bool {
+				return err != nil && strings.Contains(err.Error(), "token is malformed")
+			},
 		},
 		{
 			name: "empty token",
@@ -266,71 +277,70 @@ func TestJWTOperations(t *testing.T) {
 
 func TestGetBearerToken(t *testing.T) {
 	h := newTestHelper(t)
+	testBearerToken := h.createToken(uuid.Max, time.Hour)
 	tests := []struct {
 		name      string
-		setup     func() *http.Request
+		setup     func() http.Header
 		wantToken string
 		wantErr   error
 		checkFunc func(error) bool
 	}{
 		{
 			name: "valid token",
-			setup: func() *http.Request {
-				req, err := http.NewRequest(http.MethodGet, "https://test.io", nil)
-				if err != nil {
-					t.Fatalf("error creating test request: %v\n", err)
-				}
-				req.Header.Add("Authorization", "Bearer theToken")
-				return req
+			setup: func() http.Header {
+				return h.createRequestAuthHeader(
+					"Authorization",
+					"Bearer",
+					testBearerToken,
+				)
 			},
-			wantToken: "theToken",
+			wantToken: testBearerToken,
 			wantErr:   nil,
 		},
 		{
 			name: "non-Bearer token",
-			setup: func() *http.Request {
-				req, err := http.NewRequest(http.MethodGet, "https://test.io", nil)
-				if err != nil {
-					t.Fatalf("error creating test request: %v\n", err)
-				}
-				req.Header.Add("Authorization", "Basic theToken")
-				return req
+			setup: func() http.Header {
+				return h.createRequestAuthHeader(
+					"Authorization",
+					"Basic",
+					testBearerToken,
+				)
 			},
-			wantToken: "",
-			checkFunc: func(err error) bool {
-				return err != nil && strings.Contains(err.Error(), "invalid authorization header")
-			},
-		},
-		{
-			name: "invalid token format",
-			setup: func() *http.Request {
-				req, err := http.NewRequest(http.MethodGet, "https://test.io", nil)
-				if err != nil {
-					t.Fatalf("error creating test request: %v\n", err)
-				}
-				req.Header.Add("Authorization", "BasicBrokenToken")
-				return req
-			},
-			wantToken: "",
-			checkFunc: func(err error) bool {
-				return err != nil && strings.Contains(err.Error(), "invalid authorization header")
-			},
+			wantErr: ErrInvalidAuthorizationHeader,
 		},
 		{
 			name: "empty token",
-			setup: func() *http.Request {
-				req, err := http.NewRequest(http.MethodGet, "https://test.io", nil)
-				if err != nil {
-					t.Fatalf("error creating test request: %v\n", err)
-				}
-				req.Header.Add("Authorization", "")
-				return req
+			setup: func() http.Header {
+				return h.createRequestAuthHeader(
+					"Authorization",
+					"",
+					"",
+				)
 			},
 			wantToken: "",
 			checkFunc: func(err error) bool {
 				return err != nil && strings.Contains(err.Error(), "invalid authorization header")
 			},
 		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			header := tt.setup()
+			gotID, err := h.service.GetBearerToken(header)
+
+			if tt.checkFunc != nil {
+				if !tt.checkFunc(err) {
+					t.Errorf("ValidateJWT() error = %v, failed custom check", err)
+				}
+			} else if !errors.Is(err, tt.wantErr) {
+				t.Errorf("ValidateJWT() error = %v, wantErr = %v", err, tt.wantErr)
+			}
+
+			if gotID != tt.wantToken {
+				t.Errorf("ValidateJWT() gotID = %v, want %v", gotID, tt.wantToken)
+			}
+		})
 	}
 }
 

@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	MinPasswordLength = 8
+	MinPasswordLength = 5
 	MaxPasswordLength = 72 // bcrypt's maximum length
 	DefaultBcryptCost = 12
 	MinBcryptCost     = 10
@@ -21,11 +21,11 @@ const (
 )
 
 var (
-	ErrPasswordTooShort           = errors.New("password too short")
-	ErrPasswordTooLong            = errors.New("password too long")
-	ErrInvalidToken               = errors.New("invalid token")
-	ErrEmptyToken                 = errors.New("empty token")
-	ErrInvalidAuthorizationHeader = errors.New("invalid authorization header")
+	ErrPasswordTooShort           = errors.New("password too short\n")
+	ErrPasswordTooLong            = errors.New("password too long\n")
+	ErrInvalidToken               = errors.New("invalid token\n")
+	ErrEmptyToken                 = errors.New("empty token\n")
+	ErrInvalidAuthorizationHeader = errors.New("invalid authorization header\n")
 )
 
 type Config struct {
@@ -45,7 +45,7 @@ func NewAuthService(config Config) (*Service, error) {
 		config.BcryptCost = DefaultBcryptCost
 	}
 	if config.BcryptCost < MinBcryptCost || config.BcryptCost > MaxBcryptCost {
-		return nil, fmt.Errorf("bcrypt cost must be between %d and %d", MinBcryptCost, MaxBcryptCost)
+		return nil, fmt.Errorf("bcrypt cost must be between %d and %d\n", MinBcryptCost, MaxBcryptCost)
 	}
 	return &Service{config: config}, nil
 }
@@ -60,7 +60,7 @@ func (s *Service) HashPassword(password string) (string, error) {
 
 	hashBytes, err := bcrypt.GenerateFromPassword([]byte(password), s.config.BcryptCost)
 	if err != nil {
-		return "", fmt.Errorf("failed to hash password: %w", err)
+		return "", fmt.Errorf("failed to hash password: %w\n", err)
 	}
 
 	return string(hashBytes), nil
@@ -93,7 +93,7 @@ func (s *Service) MakeJWT(userID uuid.UUID, expiresIn time.Duration) (string, er
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signedToken, err := token.SignedString(s.config.SigningKey)
 	if err != nil {
-		return "", fmt.Errorf("failed to sign token: %w", err)
+		return "", fmt.Errorf("failed to sign token: %w\n", err)
 	}
 
 	return signedToken, nil
@@ -109,14 +109,14 @@ func (s *Service) ValidateJWT(tokenString string) (uuid.UUID, error) {
 		&jwt.RegisteredClaims{},
 		func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+				return nil, fmt.Errorf("unexpected signing method: %v\n", token.Header["alg"])
 			}
 			return s.config.SigningKey, nil
 		},
 	)
 
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("failed to parse token: %w", err)
+		return uuid.Nil, fmt.Errorf("failed to parse token: %w\n", err)
 	}
 
 	claims, ok := token.Claims.(*jwt.RegisteredClaims)
