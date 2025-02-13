@@ -27,11 +27,12 @@ type apiConfig struct {
 }
 
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
-	Token     string    `json:"token"`
+	ID           uuid.UUID `json:"id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	Email        string    `json:"email"`
+	Token        string    `json:"token"`
+	RefreshToken string    `json:"refresh_token"`
 }
 
 type Chirp struct {
@@ -63,7 +64,7 @@ func main() {
 
 	fmt.Print("starting server...\n")
 	authService, err := auth.NewAuthService(auth.Config{
-		SigningKey: []byte("hiyaka-men"),
+		SigningKey: []byte(key),
 		BcryptCost: 10,
 	})
 	if err != nil {
@@ -81,8 +82,10 @@ func main() {
 	serveMux.HandleFunc("GET /api/chirps", apiCfg.getChirpsHandler)
 	serveMux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getChirpHandler)
 	serveMux.HandleFunc("POST /api/chirps", apiCfg.createChirpHandler)
-	serveMux.HandleFunc("POST /api/users", apiCfg.userHandler)
 	serveMux.HandleFunc("POST /api/login", apiCfg.loginHandler)
+	serveMux.HandleFunc("POST /api/refresh", apiCfg.refreshHandler)
+	serveMux.HandleFunc("POST /api/revoke", apiCfg.revokeHandler)
+	serveMux.HandleFunc("POST /api/users", apiCfg.userHandler)
 
 	serveMux.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
 	serveMux.HandleFunc("POST /admin/reset", apiCfg.resetHandler)
@@ -166,9 +169,8 @@ func (cfg *apiConfig) userHandler(w http.ResponseWriter, req *http.Request) {
 
 func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
-		Password  string `json:"password"`
-		Email     string `json:"email"`
-		ExpiresIn int    `json:"expires_in_seconds"`
+		Password string `json:"password"`
+		Email    string `json:"email"`
 	}
 
 	decoder := json.NewDecoder(req.Body)
@@ -189,29 +191,87 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
 
 	err = cfg.auth.CheckPasswordHash(params.Password, dbUser.HashedPassword)
 	if err != nil {
+		fmt.Printf("loginHandler: error verifying password hash: %v\n", err)
 		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password")
 	} else {
-		var expiry int
-		if params.ExpiresIn > 0 && params.ExpiresIn < 3600 {
-			expiry = params.ExpiresIn
-		} else {
-			expiry = 3600
+		expiry := time.Second * time.Duration(60*60)
+
+		token, err := cfg.auth.MakeJWT(dbUser.ID, expiry)
+		if err != nil {
+			fmt.Printf("loginHandler: error creating JWT: %v\n", err)
+			respondWithError(w, http.StatusInternalServerError, "something went wrong")
 		}
 
-		token, err := cfg.auth.MakeJWT(dbUser.ID, time.Duration(expiry)*time.Second)
+		refresh_token, err := cfg.auth.MakeRefreshToken()
+		cfg.db.CreateRefreshToken(req.Context(), database.CreateRefreshTokenParams{
+			Token:     refresh_token,
+			UserID:    dbUser.ID,
+			ExpiresAt: time.Now().Add(time.Duration(24*60) * time.Hour),
+		})
 		if err != nil {
+			fmt.Printf("loginHandler: error creating refresh token: %v\n", err)
 			respondWithError(w, http.StatusInternalServerError, "something went wrong")
 		}
 
 		respondWithJSON(w, http.StatusOK, User{
-			ID:        dbUser.ID,
-			CreatedAt: dbUser.CreatedAt,
-			UpdatedAt: dbUser.UpdatedAt,
-			Email:     dbUser.Email,
-			Token:     token,
+			ID:           dbUser.ID,
+			CreatedAt:    dbUser.CreatedAt,
+			UpdatedAt:    dbUser.UpdatedAt,
+			Email:        dbUser.Email,
+			Token:        token,
+			RefreshToken: refresh_token,
 		})
 	}
+}
 
+func (cfg *apiConfig) refreshHandler(w http.ResponseWriter, req *http.Request) {
+	token, err := cfg.auth.GetBearerToken(req.Header)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "something went wrong")
+	}
+
+	rt, err := cfg.db.GetRefreshToken(req.Context(), token)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			respondWithError(w, http.StatusUnauthorized, "")
+			return
+		}
+		fmt.Printf("error querying refresh token: %v", err)
+		return
+	}
+
+	if time.Now().After(rt.ExpiresAt) {
+		respondWithError(w, http.StatusUnauthorized, "")
+		return
+	}
+
+	type responseToken struct {
+		Token string `json:"token"`
+	}
+
+	exp := time.Second * time.Duration(60*60)
+	t, err := cfg.auth.MakeJWT(rt.UserID, exp)
+	if err != nil {
+		fmt.Printf("error creating refresh JWT response: %v", err)
+		respondWithError(w, http.StatusInternalServerError, "something went wrong")
+	}
+	respondWithJSON(w, http.StatusOK, t)
+}
+
+func (cfg *apiConfig) revokeHandler(w http.ResponseWriter, req *http.Request) {
+	token, err := cfg.auth.GetBearerToken(req.Header)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "something went wrong")
+	}
+
+	err = cfg.db.RevokeRefreshToken(req.Context(), token)
+	if err != nil {
+		fmt.Printf("revokeHandler: error revoking token: %v", err)
+		respondWithError(w, http.StatusInternalServerError, "something went wrong")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Request) {
@@ -229,12 +289,16 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Reques
 	}
 
 	token, err := cfg.auth.GetBearerToken(req.Header)
+	fmt.Printf("createChirpHandler: parsed token: %v\n", token)
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, "")
+		return
 	}
 	user_id, err := cfg.auth.ValidateJWT(token)
+	fmt.Printf("createChirpHandler: parsed user ID: %v\n", user_id)
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, "")
+		return
 	}
 
 	if len(params.Body) > 140 {
@@ -329,17 +393,19 @@ func respondWithError(w http.ResponseWriter, code int, msg string) {
 		Error: msg,
 	}
 
-	w.Header().Add("Content-Type", "application/json")
-	errMsg, err := json.Marshal(errorBody)
-	if err != nil {
-		fmt.Printf("error during respondWithError: %v\n", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("something went wrong"))
-		return
+	if msg != "" {
+		w.Header().Add("Content-Type", "application/json")
+		errMsg, err := json.Marshal(errorBody)
+		if err != nil {
+			fmt.Printf("error during respondWithError: %v\n", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte("something went wrong"))
+			return
+		}
+		w.Write(errMsg)
 	}
 
 	w.WriteHeader(code)
-	w.Write(errMsg)
 }
 
 func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
