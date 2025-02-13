@@ -198,8 +198,7 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
 			expiry = 3600
 		}
 
-		fmt.Printf("EXPIRES>>>>%v becomes %v\n", expiry, time.Duration(expiry)*time.Second)
-		token, err := cfg.auth.MakeJWT(dbUser.ID, time.Duration(expiry))
+		token, err := cfg.auth.MakeJWT(dbUser.ID, time.Duration(expiry)*time.Second)
 		if err != nil {
 			respondWithError(w, http.StatusInternalServerError, "something went wrong")
 		}
