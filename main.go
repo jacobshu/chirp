@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/fatih/color"
 	"github.com/google/uuid"
 	"github.com/jacobshu/chirp/internal/auth"
 	"github.com/jacobshu/chirp/internal/database"
@@ -100,6 +101,7 @@ func main() {
 }
 
 func (cfg *apiConfig) metricsHandler(w http.ResponseWriter, req *http.Request) {
+	fmt.Println(color.MagentaString("GET /admin/metrics"))
 	w.Header().Add("Content-Type", "text/html; charset=utf-8")
 	template := fmt.Sprintf(`<html>
     <body>
@@ -112,6 +114,7 @@ func (cfg *apiConfig) metricsHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func (cfg *apiConfig) resetHandler(w http.ResponseWriter, req *http.Request) {
+	fmt.Println(color.MagentaString("POST /admin/reset"))
 	cfg.fileserverHits = atomic.Int32{}
 	if cfg.platform != "dev" {
 		respondWithError(w, http.StatusForbidden, "Forbidden")
@@ -122,12 +125,14 @@ func (cfg *apiConfig) resetHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func healthHandler(w http.ResponseWriter, req *http.Request) {
+	fmt.Println(color.MagentaString("GET /api/healthz"))
 	w.Header().Add("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }
 
 func (cfg *apiConfig) userHandler(w http.ResponseWriter, req *http.Request) {
+	fmt.Println(color.MagentaString("POST /api/users"))
 	type parameters struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -168,6 +173,7 @@ func (cfg *apiConfig) userHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
+	fmt.Println(color.MagentaString("POST /api/login"))
 	type parameters struct {
 		Password string `json:"password"`
 		Email    string `json:"email"`
@@ -225,6 +231,7 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func (cfg *apiConfig) refreshHandler(w http.ResponseWriter, req *http.Request) {
+	fmt.Println(color.MagentaString("POST /api/refresh"))
 	token, err := cfg.auth.GetBearerToken(req.Header)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
@@ -259,6 +266,7 @@ func (cfg *apiConfig) refreshHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func (cfg *apiConfig) revokeHandler(w http.ResponseWriter, req *http.Request) {
+	fmt.Println(color.MagentaString("POST /api/revoke"))
 	token, err := cfg.auth.GetBearerToken(req.Header)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
@@ -275,6 +283,7 @@ func (cfg *apiConfig) revokeHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Request) {
+	fmt.Println(color.MagentaString("POST /api/chirps"))
 	type parameters struct {
 		Body string `json:"body"`
 	}
@@ -339,6 +348,7 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Reques
 }
 
 func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, req *http.Request) {
+	fmt.Println(color.MagentaString("GET /api/chirps/{chirp_id}"))
 	dbChirps, err := cfg.db.GetAllChirps(req.Context())
 	if err != nil {
 		fmt.Printf("getChirpsHandler: error querying for chirps: %v\n", err)
