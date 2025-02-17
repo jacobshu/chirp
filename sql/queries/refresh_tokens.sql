@@ -11,9 +11,7 @@ returning *;
 
 -- name: GetRefreshToken :one
 select * from refresh_tokens
-where (token = $1 and expires_at > now()) or
-(token = $1 and revoked_at > now()) or 
-(token = $1 and revoked_at is not null);
+where token = $1 and (expires_at > now() and revoked_at is null);
 
 -- name: RevokeRefreshToken :exec
 update refresh_tokens
