@@ -87,6 +87,7 @@ func main() {
 	serveMux.HandleFunc("POST /api/refresh", apiCfg.refreshHandler)
 	serveMux.HandleFunc("POST /api/revoke", apiCfg.revokeHandler)
 	serveMux.HandleFunc("POST /api/users", apiCfg.userHandler)
+	serveMux.HandleFunc("PUT /api/users", apiCfg.updateUserHandler)
 
 	serveMux.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
 	serveMux.HandleFunc("POST /admin/reset", apiCfg.resetHandler)
@@ -169,6 +170,59 @@ func (cfg *apiConfig) userHandler(w http.ResponseWriter, req *http.Request) {
 		CreatedAt: user.CreatedAt,
 		UpdatedAt: user.UpdatedAt,
 		Email:     user.Email,
+	})
+}
+
+func (cfg *apiConfig) updateUserHandler(w http.ResponseWriter, req *http.Request) {
+	fmt.Println(color.MagentaString("PUT /api/users"))
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	decoder := json.NewDecoder(req.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		fmt.Println(color.RedString("error getting params: %v", err))
+		respondWithError(w, http.StatusInternalServerError, "something went wrong")
+	}
+
+	jwt, err := cfg.auth.GetBearerToken(req.Header)
+	if err != nil {
+		// TODO: parse out possible errors
+		fmt.Println(color.RedString("error getting JWT: %v", err))
+		respondWithError(w, http.StatusUnauthorized, "")
+		return
+	}
+	userID, err := cfg.auth.ValidateJWT(jwt)
+	if err != nil {
+		fmt.Println(color.RedString("error parsing JWT: %v", err))
+		respondWithError(w, http.StatusUnauthorized, "")
+		return
+	}
+
+	hash, err := cfg.auth.HashPassword(params.Password)
+	if err != nil {
+		fmt.Println(color.RedString("error hashing password: %v", err))
+		respondWithError(w, http.StatusInternalServerError, "something went wrong")
+		return
+	}
+
+	err = cfg.db.UpdateUser(req.Context(), database.UpdateUserParams{
+		ID:             userID,
+		Email:          params.Email,
+		HashedPassword: hash,
+	})
+
+	if err != nil {
+		fmt.Println(color.RedString("error updating user: %v", err))
+		respondWithError(w, http.StatusInternalServerError, "something went wrong")
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, User{
+		Email: params.Email,
 	})
 }
 
