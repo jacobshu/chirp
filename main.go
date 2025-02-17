@@ -237,9 +237,11 @@ func (cfg *apiConfig) refreshHandler(w http.ResponseWriter, req *http.Request) {
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
 	}
 
+	fmt.Println(color.CyanString("parsed token: %v", token))
 	rt, err := cfg.db.GetRefreshToken(req.Context(), token)
 	if err != nil {
 		if err == sql.ErrNoRows {
+			fmt.Println(color.YellowString("token not in db"))
 			respondWithError(w, http.StatusUnauthorized, "")
 			return
 		}
@@ -248,6 +250,7 @@ func (cfg *apiConfig) refreshHandler(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if time.Now().After(rt.ExpiresAt) {
+		fmt.Println(color.YellowString("token expired"))
 		respondWithError(w, http.StatusUnauthorized, "")
 		return
 	}
@@ -262,7 +265,7 @@ func (cfg *apiConfig) refreshHandler(w http.ResponseWriter, req *http.Request) {
 		fmt.Printf("error creating refresh JWT response: %v", err)
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
 	}
-	respondWithJSON(w, http.StatusOK, t)
+	respondWithJSON(w, http.StatusOK, responseToken{Token: t})
 }
 
 func (cfg *apiConfig) revokeHandler(w http.ResponseWriter, req *http.Request) {

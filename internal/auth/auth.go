@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fatih/color"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
@@ -131,6 +132,7 @@ func (s *Service) ValidateJWT(tokenString string) (uuid.UUID, error) {
 
 func (s *Service) GetBearerToken(headers http.Header) (string, error) {
 	tokenString := headers.Get("Authorization")
+	fmt.Println(color.GreenString("GetBearerToken: %v", tokenString))
 	fields := strings.Split(tokenString, " ")
 
 	if len(fields) > 2 || len(fields) < 2 || fields[0] != "Bearer" {
