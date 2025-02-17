@@ -16,3 +16,7 @@ order by created_at asc;
 -- name: GetChirp :one
 select * from chirps
 where id = $1;
+
+-- name: DeleteChirp :exec
+delete from chirps
+where id = $1;

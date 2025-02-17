@@ -82,6 +82,7 @@ func main() {
 	serveMux.HandleFunc("GET /api/healthz", healthHandler)
 	serveMux.HandleFunc("GET /api/chirps", apiCfg.getChirpsHandler)
 	serveMux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getChirpHandler)
+	serveMux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.deleteChirpHandler)
 	serveMux.HandleFunc("POST /api/chirps", apiCfg.createChirpHandler)
 	serveMux.HandleFunc("POST /api/login", apiCfg.loginHandler)
 	serveMux.HandleFunc("POST /api/refresh", apiCfg.refreshHandler)
@@ -188,18 +189,9 @@ func (cfg *apiConfig) updateUserHandler(w http.ResponseWriter, req *http.Request
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
 	}
 
-	jwt, err := cfg.auth.GetBearerToken(req.Header)
+	userID, err := cfg.auth.Authorize(req.Header)
 	if err != nil {
-		// TODO: parse out possible errors
-		fmt.Println(color.RedString("error getting JWT: %v", err))
 		respondWithError(w, http.StatusUnauthorized, "")
-		return
-	}
-	userID, err := cfg.auth.ValidateJWT(jwt)
-	if err != nil {
-		fmt.Println(color.RedString("error parsing JWT: %v", err))
-		respondWithError(w, http.StatusUnauthorized, "")
-		return
 	}
 
 	hash, err := cfg.auth.HashPassword(params.Password)
@@ -354,17 +346,9 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	token, err := cfg.auth.GetBearerToken(req.Header)
-	fmt.Printf("createChirpHandler: parsed token: %v\n", token)
+	userID, err := cfg.auth.Authorize(req.Header)
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, "")
-		return
-	}
-	user_id, err := cfg.auth.ValidateJWT(token)
-	fmt.Printf("createChirpHandler: parsed user ID: %v\n", user_id)
-	if err != nil {
-		respondWithError(w, http.StatusUnauthorized, "")
-		return
 	}
 
 	if len(params.Body) > 140 {
@@ -386,7 +370,7 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Reques
 
 		dbChirp, err := cfg.db.CreateChirp(req.Context(), database.CreateChirpParams{
 			Body:   clean,
-			UserID: user_id,
+			UserID: userID,
 		})
 		if err != nil {
 			fmt.Printf("createChirpHandler: error inserting new chirp: %v\n", err)
@@ -404,8 +388,45 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Reques
 	}
 }
 
+func (cfg *apiConfig) deleteChirpHandler(w http.ResponseWriter, req *http.Request) {
+	chirpID, err := uuid.Parse(req.PathValue("chirpID"))
+	if err != nil {
+		fmt.Printf("deleteChirpHandler: error parsing chirp from endpoint: %v\n", err)
+		respondWithError(w, http.StatusInternalServerError, "something went wrong")
+		return
+	}
+	fmt.Println(color.MagentaString("DELETE /api/chirps/%s", chirpID))
+
+	userID, err := cfg.auth.Authorize(req.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "")
+		return
+	}
+
+	dbChirp, err := cfg.db.GetChirp(req.Context(), chirpID)
+	if err != nil {
+		fmt.Println(color.RedString("deleteChirpHandler: error querying for chirp: %v\n", err))
+		respondWithError(w, http.StatusNotFound, "chirp not found")
+		return
+	}
+
+	if dbChirp.UserID != userID {
+		respondWithError(w, http.StatusForbidden, "")
+		return
+	}
+
+	err = cfg.db.DeleteChirp(req.Context(), chirpID)
+	if err != nil {
+		fmt.Println(color.RedString("error deleting chirp: %v", err))
+		respondWithError(w, http.StatusInternalServerError, "something went wrong")
+		return
+	}
+
+	respondWithJSON(w, http.StatusNoContent, "")
+}
+
 func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, req *http.Request) {
-	fmt.Println(color.MagentaString("GET /api/chirps/{chirp_id}"))
+	fmt.Println(color.MagentaString("GET /api/chirps"))
 	dbChirps, err := cfg.db.GetAllChirps(req.Context())
 	if err != nil {
 		fmt.Printf("getChirpsHandler: error querying for chirps: %v\n", err)
@@ -434,10 +455,11 @@ func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, req *http.Request) 
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
 		return
 	}
+	fmt.Println(color.MagentaString("GET /api/chirps/%s", chirpID))
 
 	dbChirp, err := cfg.db.GetChirp(req.Context(), chirpID)
 	if err != nil {
-		fmt.Printf("getChirpHandler: error querying for chirp: %v\n", err)
+		fmt.Println(color.RedString("getChirpHandler: error querying for chirp: %v", err))
 		respondWithError(w, http.StatusNotFound, "chirp not found")
 		return
 	}
@@ -460,6 +482,7 @@ func respondWithError(w http.ResponseWriter, code int, msg string) {
 		Error: msg,
 	}
 
+	w.WriteHeader(code)
 	if msg != "" {
 		w.Header().Add("Content-Type", "application/json")
 		errMsg, err := json.Marshal(errorBody)
@@ -471,8 +494,6 @@ func respondWithError(w http.ResponseWriter, code int, msg string) {
 		}
 		w.Write(errMsg)
 	}
-
-	w.WriteHeader(code)
 }
 
 func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {

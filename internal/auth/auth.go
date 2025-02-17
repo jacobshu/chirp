@@ -53,6 +53,19 @@ func NewAuthService(config Config) (*Service, error) {
 	return &Service{config: config}, nil
 }
 
+func (s *Service) Authorize(header http.Header) (uuid.UUID, error) {
+	token, err := s.GetBearerToken(header)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	userID, err := s.ValidateJWT(token)
+	if err != nil {
+		return uuid.Nil, err
+	}
+
+	return userID, nil
+}
+
 func (s *Service) HashPassword(password string) (string, error) {
 	if len(password) < MinPasswordLength {
 		return "", ErrPasswordTooShort
