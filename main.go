@@ -471,13 +471,30 @@ func (cfg *apiConfig) deleteChirpHandler(w http.ResponseWriter, req *http.Reques
 
 func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, req *http.Request) {
 	aid := req.URL.Query().Get("author_id")
-	fmt.Println(color.YellowString(aid))
+	fmt.Println(color.YellowString("author_id ? %s", aid))
 
-	dbChirps, err := cfg.db.GetAllChirps(req.Context())
-	if err != nil {
-		fmt.Printf("getChirpsHandler: error querying for chirps: %v\n", err)
-		respondWithError(w, http.StatusInternalServerError, "something went wrong")
-		return
+	var dbChirps []database.Chirp
+	if aid != "" {
+		userID, err := uuid.Parse(aid)
+		if err != nil {
+			fmt.Println(color.RedString("invalid author_id parameter: %v", aid))
+			dbChirps, err = cfg.db.GetAllChirps(req.Context())
+			if err != nil {
+				fmt.Printf("getChirpsHandler: error querying for chirps: %v\n", err)
+				respondWithError(w, http.StatusInternalServerError, "something went wrong")
+				return
+			}
+		} else {
+			dbChirps, err = cfg.db.GetChirpsByUserID(req.Context(), userID)
+		}
+	} else {
+		dbc, err := cfg.db.GetAllChirps(req.Context())
+		if err != nil {
+			fmt.Printf("getChirpsHandler: error querying for chirps: %v\n", err)
+			respondWithError(w, http.StatusInternalServerError, "something went wrong")
+			return
+		}
+		dbChirps = dbc
 	}
 
 	chirps := []Chirp{}
