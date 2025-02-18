@@ -63,7 +63,7 @@ func main() {
 	serveMux := http.NewServeMux()
 	server := http.Server{
 		Addr:    ":8080",
-		Handler: serveMux,
+		Handler: NewRequestLogger(serveMux),
 	}
 
 	fmt.Print("starting server...\n")
@@ -108,7 +108,6 @@ func main() {
 }
 
 func (cfg *apiConfig) metricsHandler(w http.ResponseWriter, req *http.Request) {
-	fmt.Println(color.MagentaString("GET /admin/metrics"))
 	w.Header().Add("Content-Type", "text/html; charset=utf-8")
 	template := fmt.Sprintf(`<html>
     <body>
@@ -121,7 +120,6 @@ func (cfg *apiConfig) metricsHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func (cfg *apiConfig) resetHandler(w http.ResponseWriter, req *http.Request) {
-	fmt.Println(color.MagentaString("POST /admin/reset"))
 	cfg.fileserverHits = atomic.Int32{}
 	if cfg.platform != "dev" {
 		respondWithError(w, http.StatusForbidden, "Forbidden")
@@ -132,14 +130,12 @@ func (cfg *apiConfig) resetHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func healthHandler(w http.ResponseWriter, req *http.Request) {
-	fmt.Println(color.MagentaString("GET /api/healthz"))
 	w.Header().Add("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }
 
 func (cfg *apiConfig) userHandler(w http.ResponseWriter, req *http.Request) {
-	fmt.Println(color.MagentaString("POST /api/users"))
 	type parameters struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -181,7 +177,6 @@ func (cfg *apiConfig) userHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func (cfg *apiConfig) updateUserHandler(w http.ResponseWriter, req *http.Request) {
-	fmt.Println(color.MagentaString("PUT /api/users"))
 	type parameters struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -225,7 +220,6 @@ func (cfg *apiConfig) updateUserHandler(w http.ResponseWriter, req *http.Request
 }
 
 func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
-	fmt.Println(color.MagentaString("POST /api/login"))
 	type parameters struct {
 		Password string `json:"password"`
 		Email    string `json:"email"`
@@ -284,13 +278,11 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func (cfg *apiConfig) refreshHandler(w http.ResponseWriter, req *http.Request) {
-	fmt.Println(color.MagentaString("POST /api/refresh"))
 	token, err := cfg.auth.GetBearerToken(req.Header)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
 	}
 
-	fmt.Println(color.CyanString("parsed token: %v", token))
 	rt, err := cfg.db.GetRefreshToken(req.Context(), token)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -322,7 +314,6 @@ func (cfg *apiConfig) refreshHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func (cfg *apiConfig) revokeHandler(w http.ResponseWriter, req *http.Request) {
-	fmt.Println(color.MagentaString("POST /api/revoke"))
 	token, err := cfg.auth.GetBearerToken(req.Header)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
@@ -339,7 +330,6 @@ func (cfg *apiConfig) revokeHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func (cfg *apiConfig) webhooksHandler(w http.ResponseWriter, req *http.Request) {
-	fmt.Println(color.MagentaString("%s %s", req.Method, req.URL.String()))
 	type parameters struct {
 		Event string `json:"event"`
 		Data  struct {
@@ -369,18 +359,15 @@ func (cfg *apiConfig) webhooksHandler(w http.ResponseWriter, req *http.Request) 
 	}
 
 	if params.Event != "user.upgraded" {
-		fmt.Println(color.CyanString("wrong event: %v", params.Event))
 		respondWithError(w, http.StatusNoContent, "")
 		return
 	} else {
 		userID, err := uuid.Parse(params.Data.UserID)
-		fmt.Println(color.CyanString("upgrading: %v", userID))
 		if err != nil {
 			fmt.Println(color.RedString("error parsing user ID: %v", err))
 		}
 
-		res, err := cfg.db.UpgradeToChirpyRed(req.Context(), userID)
-		fmt.Println(color.CyanString("affected rows upgrade result: %v", res.RowsAffected))
+		_, err = cfg.db.UpgradeToChirpyRed(req.Context(), userID)
 		if err != nil {
 			fmt.Println(color.RedString("error upgrading to chirpy red: %v", err))
 			respondWithError(w, http.StatusNotFound, "")
@@ -391,7 +378,6 @@ func (cfg *apiConfig) webhooksHandler(w http.ResponseWriter, req *http.Request) 
 }
 
 func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Request) {
-	fmt.Println(color.MagentaString("%s %s", req.Method, req.URL.String()))
 	type parameters struct {
 		Body string `json:"body"`
 	}
@@ -448,7 +434,6 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Reques
 }
 
 func (cfg *apiConfig) deleteChirpHandler(w http.ResponseWriter, req *http.Request) {
-	fmt.Println(color.MagentaString("%s %s", req.Method, req.URL.String()))
 	chirpID, err := uuid.Parse(req.PathValue("chirpID"))
 	if err != nil {
 		fmt.Printf("deleteChirpHandler: error parsing chirp from endpoint: %v\n", err)
@@ -485,8 +470,8 @@ func (cfg *apiConfig) deleteChirpHandler(w http.ResponseWriter, req *http.Reques
 }
 
 func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, req *http.Request) {
-	fmt.Println(color.MagentaString("%s %s", req.Method, req.URL.String()))
 	aid := req.URL.Query().Get("author_id")
+	fmt.Println(color.YellowString(aid))
 
 	dbChirps, err := cfg.db.GetAllChirps(req.Context())
 	if err != nil {
@@ -516,7 +501,6 @@ func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, req *http.Request) 
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
 		return
 	}
-	fmt.Println(color.MagentaString("GET /api/chirps/%s", chirpID))
 
 	dbChirp, err := cfg.db.GetChirp(req.Context(), chirpID)
 	if err != nil {
@@ -577,4 +561,18 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 		cfg.fileserverHits.Add(1)
 		next.ServeHTTP(w, r)
 	})
+}
+
+type RequestLogger struct {
+	handler http.Handler
+}
+
+func (l *RequestLogger) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	l.handler.ServeHTTP(w, r)
+	fmt.Println(color.MagentaString("%s %s %v", r.Method, r.URL.String(), time.Since(start)))
+}
+
+func NewRequestLogger(handlerToWrap http.Handler) *RequestLogger {
+	return &RequestLogger{handlerToWrap}
 }
