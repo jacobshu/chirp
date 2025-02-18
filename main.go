@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -471,7 +472,9 @@ func (cfg *apiConfig) deleteChirpHandler(w http.ResponseWriter, req *http.Reques
 
 func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, req *http.Request) {
 	aid := req.URL.Query().Get("author_id")
+	sortDir := req.URL.Query().Get("sort")
 	fmt.Println(color.YellowString("author_id ? %s", aid))
+	fmt.Println(color.YellowString("sort ? %s", sortDir))
 
 	var dbChirps []database.Chirp
 	if aid != "" {
@@ -508,6 +511,9 @@ func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, req *http.Request)
 		})
 	}
 
+	if sortDir == "desc" {
+		sort.Slice(chirps, func(i, j int) bool { return chirps[i].CreatedAt.After(chirps[j].CreatedAt) })
+	}
 	respondWithJSON(w, http.StatusOK, chirps)
 }
 
