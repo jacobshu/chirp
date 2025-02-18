@@ -25,6 +25,7 @@ type apiConfig struct {
 	platform       string
 	auth           auth.Service
 	signingKey     string
+	polkaKey       string
 }
 
 type User struct {
@@ -34,6 +35,7 @@ type User struct {
 	Email        string    `json:"email"`
 	Token        string    `json:"token"`
 	RefreshToken string    `json:"refresh_token"`
+	IsChirpyRed  bool      `json:"is_chirpy_red"`
 }
 
 type Chirp struct {
@@ -49,6 +51,7 @@ func main() {
 	dbURL := os.Getenv("DB_URL")
 	platform := os.Getenv("PLATFORM")
 	key := os.Getenv("TOKEN_STRING")
+	polkaAPIKey := os.Getenv("POLKA_KEY")
 
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
@@ -77,6 +80,7 @@ func main() {
 		platform:   platform,
 		auth:       *authService,
 		signingKey: key,
+		polkaKey:   polkaAPIKey,
 	}
 
 	serveMux.HandleFunc("GET /api/healthz", healthHandler)
@@ -85,6 +89,7 @@ func main() {
 	serveMux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.deleteChirpHandler)
 	serveMux.HandleFunc("POST /api/chirps", apiCfg.createChirpHandler)
 	serveMux.HandleFunc("POST /api/login", apiCfg.loginHandler)
+	serveMux.HandleFunc("POST /api/polka/webhooks", apiCfg.webhooksHandler)
 	serveMux.HandleFunc("POST /api/refresh", apiCfg.refreshHandler)
 	serveMux.HandleFunc("POST /api/revoke", apiCfg.revokeHandler)
 	serveMux.HandleFunc("POST /api/users", apiCfg.userHandler)
@@ -167,10 +172,11 @@ func (cfg *apiConfig) userHandler(w http.ResponseWriter, req *http.Request) {
 	}
 
 	respondWithJSON(w, http.StatusCreated, User{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
+		ID:          user.ID,
+		CreatedAt:   user.CreatedAt,
+		UpdatedAt:   user.UpdatedAt,
+		Email:       user.Email,
+		IsChirpyRed: user.IsChirpyRed,
 	})
 }
 
@@ -270,6 +276,7 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
 			CreatedAt:    dbUser.CreatedAt,
 			UpdatedAt:    dbUser.UpdatedAt,
 			Email:        dbUser.Email,
+			IsChirpyRed:  dbUser.IsChirpyRed,
 			Token:        token,
 			RefreshToken: refresh_token,
 		})
@@ -331,8 +338,60 @@ func (cfg *apiConfig) revokeHandler(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (cfg *apiConfig) webhooksHandler(w http.ResponseWriter, req *http.Request) {
+	fmt.Println(color.MagentaString("%s %s", req.Method, req.URL.String()))
+	type parameters struct {
+		Event string `json:"event"`
+		Data  struct {
+			UserID string `json:"user_id"`
+		} `json:"data"`
+	}
+
+	decoder := json.NewDecoder(req.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		fmt.Println(color.RedString("error parsing body: %v", err))
+		respondWithError(w, http.StatusInternalServerError, "something went wrong")
+		return
+	}
+
+	headerKey, err := cfg.auth.GetAPIKey(req.Header)
+	if err != nil {
+		fmt.Println(color.RedString("error getting API key from headers: %v", err))
+		respondWithError(w, http.StatusUnauthorized, "")
+		return
+	}
+
+	if headerKey != cfg.polkaKey {
+		respondWithError(w, http.StatusUnauthorized, "")
+		return
+	}
+
+	if params.Event != "user.upgraded" {
+		fmt.Println(color.CyanString("wrong event: %v", params.Event))
+		respondWithError(w, http.StatusNoContent, "")
+		return
+	} else {
+		userID, err := uuid.Parse(params.Data.UserID)
+		fmt.Println(color.CyanString("upgrading: %v", userID))
+		if err != nil {
+			fmt.Println(color.RedString("error parsing user ID: %v", err))
+		}
+
+		res, err := cfg.db.UpgradeToChirpyRed(req.Context(), userID)
+		fmt.Println(color.CyanString("affected rows upgrade result: %v", res.RowsAffected))
+		if err != nil {
+			fmt.Println(color.RedString("error upgrading to chirpy red: %v", err))
+			respondWithError(w, http.StatusNotFound, "")
+			return
+		}
+		respondWithJSON(w, http.StatusNoContent, "")
+	}
+}
+
 func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Request) {
-	fmt.Println(color.MagentaString("POST /api/chirps"))
+	fmt.Println(color.MagentaString("%s %s", req.Method, req.URL.String()))
 	type parameters struct {
 		Body string `json:"body"`
 	}
@@ -389,13 +448,13 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Reques
 }
 
 func (cfg *apiConfig) deleteChirpHandler(w http.ResponseWriter, req *http.Request) {
+	fmt.Println(color.MagentaString("%s %s", req.Method, req.URL.String()))
 	chirpID, err := uuid.Parse(req.PathValue("chirpID"))
 	if err != nil {
 		fmt.Printf("deleteChirpHandler: error parsing chirp from endpoint: %v\n", err)
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
 		return
 	}
-	fmt.Println(color.MagentaString("DELETE /api/chirps/%s", chirpID))
 
 	userID, err := cfg.auth.Authorize(req.Header)
 	if err != nil {
@@ -426,7 +485,9 @@ func (cfg *apiConfig) deleteChirpHandler(w http.ResponseWriter, req *http.Reques
 }
 
 func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, req *http.Request) {
-	fmt.Println(color.MagentaString("GET /api/chirps"))
+	fmt.Println(color.MagentaString("%s %s", req.Method, req.URL.String()))
+	aid := req.URL.Query().Get("author_id")
+
 	dbChirps, err := cfg.db.GetAllChirps(req.Context())
 	if err != nil {
 		fmt.Printf("getChirpsHandler: error querying for chirps: %v\n", err)

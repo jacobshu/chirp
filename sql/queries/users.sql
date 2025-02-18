@@ -20,7 +20,7 @@ hashed_password = $3,
 updated_at = now()
 where id = $1;
 
--- name: UpgradeToChirpyRed :exec
+-- name: UpgradeToChirpyRed :execresult
 update users 
 set is_chirpy_red = true
 where id = $1;

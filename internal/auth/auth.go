@@ -66,6 +66,15 @@ func (s *Service) Authorize(header http.Header) (uuid.UUID, error) {
 	return userID, nil
 }
 
+func (s *Service) GetAPIKey(headers http.Header) (string, error) {
+	auth := headers.Get("Authorization")
+	key := strings.TrimPrefix(auth, "ApiKey ")
+	if key == auth {
+		return "", ErrInvalidAuthorizationHeader
+	}
+	return key, nil
+}
+
 func (s *Service) HashPassword(password string) (string, error) {
 	if len(password) < MinPasswordLength {
 		return "", ErrPasswordTooShort
