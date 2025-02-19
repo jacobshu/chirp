@@ -14,13 +14,14 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/google/uuid"
+	"github.com/jacobshu/chirp/api/middleware"
 	"github.com/jacobshu/chirp/internal/auth"
 	"github.com/jacobshu/chirp/internal/database"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
 
-type apiConfig struct {
+type App struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
 	platform       string
@@ -64,7 +65,7 @@ func main() {
 	serveMux := http.NewServeMux()
 	server := http.Server{
 		Addr:    ":8080",
-		Handler: NewRequestLogger(serveMux),
+		Handler: middleware.NewRequestLogger(serveMux),
 	}
 
 	fmt.Print("starting server...\n")
@@ -76,7 +77,7 @@ func main() {
 		fmt.Printf("error creating auth service: %v\n", err)
 	}
 
-	apiCfg := apiConfig{
+	app := App{
 		db:         dbQueries,
 		platform:   platform,
 		auth:       *authService,
@@ -85,22 +86,22 @@ func main() {
 	}
 
 	serveMux.HandleFunc("GET /api/healthz", healthHandler)
-	serveMux.HandleFunc("GET /api/chirps", apiCfg.getChirpsHandler)
-	serveMux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getChirpHandler)
-	serveMux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.deleteChirpHandler)
-	serveMux.HandleFunc("POST /api/chirps", apiCfg.createChirpHandler)
-	serveMux.HandleFunc("POST /api/login", apiCfg.loginHandler)
-	serveMux.HandleFunc("POST /api/polka/webhooks", apiCfg.webhooksHandler)
-	serveMux.HandleFunc("POST /api/refresh", apiCfg.refreshHandler)
-	serveMux.HandleFunc("POST /api/revoke", apiCfg.revokeHandler)
-	serveMux.HandleFunc("POST /api/users", apiCfg.userHandler)
-	serveMux.HandleFunc("PUT /api/users", apiCfg.updateUserHandler)
+	serveMux.HandleFunc("GET /api/chirps", app.getChirpsHandler)
+	serveMux.HandleFunc("GET /api/chirps/{chirpID}", app.getChirpHandler)
+	serveMux.HandleFunc("DELETE /api/chirps/{chirpID}", app.deleteChirpHandler)
+	serveMux.HandleFunc("POST /api/chirps", app.createChirpHandler)
+	serveMux.HandleFunc("POST /api/login", app.loginHandler)
+	serveMux.HandleFunc("POST /api/polka/webhooks", app.webhooksHandler)
+	serveMux.HandleFunc("POST /api/refresh", app.refreshHandler)
+	serveMux.HandleFunc("POST /api/revoke", app.revokeHandler)
+	serveMux.HandleFunc("POST /api/users", app.userHandler)
+	serveMux.HandleFunc("PUT /api/users", app.updateUserHandler)
 
-	serveMux.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
-	serveMux.HandleFunc("POST /admin/reset", apiCfg.resetHandler)
+	serveMux.HandleFunc("GET /admin/metrics", app.metricsHandler)
+	serveMux.HandleFunc("POST /admin/reset", app.resetHandler)
 
-	fileServerHandler := http.StripPrefix("/app/", http.FileServer(http.Dir(".")))
-	serveMux.Handle("/app/", apiCfg.middlewareMetricsInc(fileServerHandler))
+	// fileServerHandler := http.StripPrefix("/app/", http.FileServer(http.Dir(".")))
+	// serveMux.Handle("/app/", middleware.middlewareMetricsInc(fileServerHandler))
 
 	if err := server.ListenAndServe(); err != nil {
 		fmt.Printf("error during serve: %v\n", err)
@@ -108,25 +109,25 @@ func main() {
 
 }
 
-func (cfg *apiConfig) metricsHandler(w http.ResponseWriter, req *http.Request) {
+func (app *App) metricsHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Add("Content-Type", "text/html; charset=utf-8")
 	template := fmt.Sprintf(`<html>
     <body>
       <h1>Welcome, Chirpy Admin</h1>
       <p>Chirpy has been visited %d times!</p>
     </body>
-  </html>`, cfg.fileserverHits.Load())
+  </html>`, app.fileserverHits.Load())
 
 	w.Write([]byte(template))
 }
 
-func (cfg *apiConfig) resetHandler(w http.ResponseWriter, req *http.Request) {
-	cfg.fileserverHits = atomic.Int32{}
-	if cfg.platform != "dev" {
+func (app *App) resetHandler(w http.ResponseWriter, req *http.Request) {
+	app.fileserverHits = atomic.Int32{}
+	if app.platform != "dev" {
 		respondWithError(w, http.StatusForbidden, "Forbidden")
 		return
 	} else {
-		cfg.db.Reset(req.Context())
+		app.db.Reset(req.Context())
 	}
 }
 
@@ -136,7 +137,7 @@ func healthHandler(w http.ResponseWriter, req *http.Request) {
 	w.Write([]byte("OK"))
 }
 
-func (cfg *apiConfig) userHandler(w http.ResponseWriter, req *http.Request) {
+func (app *App) userHandler(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -151,14 +152,14 @@ func (cfg *apiConfig) userHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	hashedPass, err := cfg.auth.HashPassword(params.Password)
+	hashedPass, err := app.auth.HashPassword(params.Password)
 	if err != nil {
 		fmt.Printf("userHandler: error hashing user password: %v\n", err)
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
 		return
 	}
 
-	user, err := cfg.db.CreateUser(req.Context(), database.CreateUserParams{
+	user, err := app.db.CreateUser(req.Context(), database.CreateUserParams{
 		Email:          params.Email,
 		HashedPassword: hashedPass,
 	})
@@ -177,7 +178,7 @@ func (cfg *apiConfig) userHandler(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
-func (cfg *apiConfig) updateUserHandler(w http.ResponseWriter, req *http.Request) {
+func (app *App) updateUserHandler(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -191,19 +192,19 @@ func (cfg *apiConfig) updateUserHandler(w http.ResponseWriter, req *http.Request
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
 	}
 
-	userID, err := cfg.auth.Authorize(req.Header)
+	userID, err := app.auth.Authorize(req.Header)
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, "")
 	}
 
-	hash, err := cfg.auth.HashPassword(params.Password)
+	hash, err := app.auth.HashPassword(params.Password)
 	if err != nil {
 		fmt.Println(color.RedString("error hashing password: %v", err))
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
 		return
 	}
 
-	err = cfg.db.UpdateUser(req.Context(), database.UpdateUserParams{
+	err = app.db.UpdateUser(req.Context(), database.UpdateUserParams{
 		ID:             userID,
 		Email:          params.Email,
 		HashedPassword: hash,
@@ -220,7 +221,7 @@ func (cfg *apiConfig) updateUserHandler(w http.ResponseWriter, req *http.Request
 	})
 }
 
-func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
+func (app *App) loginHandler(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
 		Password string `json:"password"`
 		Email    string `json:"email"`
@@ -235,28 +236,28 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	dbUser, err := cfg.db.GetUserByEmail(req.Context(), params.Email)
+	dbUser, err := app.db.GetUserByEmail(req.Context(), params.Email)
 	if err != nil {
 		fmt.Printf("loginHandler: error querying user: %v\n", err)
 		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password")
 		return
 	}
 
-	err = cfg.auth.CheckPasswordHash(params.Password, dbUser.HashedPassword)
+	err = app.auth.CheckPasswordHash(params.Password, dbUser.HashedPassword)
 	if err != nil {
 		fmt.Printf("loginHandler: error verifying password hash: %v\n", err)
 		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password")
 	} else {
 		expiry := time.Second * time.Duration(60*60)
 
-		token, err := cfg.auth.MakeJWT(dbUser.ID, expiry)
+		token, err := app.auth.MakeJWT(dbUser.ID, expiry)
 		if err != nil {
 			fmt.Printf("loginHandler: error creating JWT: %v\n", err)
 			respondWithError(w, http.StatusInternalServerError, "something went wrong")
 		}
 
-		refresh_token, err := cfg.auth.MakeRefreshToken()
-		cfg.db.CreateRefreshToken(req.Context(), database.CreateRefreshTokenParams{
+		refresh_token, err := app.auth.MakeRefreshToken()
+		app.db.CreateRefreshToken(req.Context(), database.CreateRefreshTokenParams{
 			Token:     refresh_token,
 			UserID:    dbUser.ID,
 			ExpiresAt: time.Now().Add(time.Duration(24*60) * time.Hour),
@@ -278,13 +279,13 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func (cfg *apiConfig) refreshHandler(w http.ResponseWriter, req *http.Request) {
-	token, err := cfg.auth.GetBearerToken(req.Header)
+func (app *App) refreshHandler(w http.ResponseWriter, req *http.Request) {
+	token, err := app.auth.GetBearerToken(req.Header)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
 	}
 
-	rt, err := cfg.db.GetRefreshToken(req.Context(), token)
+	rt, err := app.db.GetRefreshToken(req.Context(), token)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			fmt.Println(color.YellowString("token not in db"))
@@ -306,7 +307,7 @@ func (cfg *apiConfig) refreshHandler(w http.ResponseWriter, req *http.Request) {
 	}
 
 	exp := time.Second * time.Duration(60*60)
-	t, err := cfg.auth.MakeJWT(rt.UserID, exp)
+	t, err := app.auth.MakeJWT(rt.UserID, exp)
 	if err != nil {
 		fmt.Printf("error creating refresh JWT response: %v", err)
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
@@ -314,13 +315,13 @@ func (cfg *apiConfig) refreshHandler(w http.ResponseWriter, req *http.Request) {
 	respondWithJSON(w, http.StatusOK, responseToken{Token: t})
 }
 
-func (cfg *apiConfig) revokeHandler(w http.ResponseWriter, req *http.Request) {
-	token, err := cfg.auth.GetBearerToken(req.Header)
+func (app *App) revokeHandler(w http.ResponseWriter, req *http.Request) {
+	token, err := app.auth.GetBearerToken(req.Header)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
 	}
 
-	err = cfg.db.RevokeRefreshToken(req.Context(), token)
+	err = app.db.RevokeRefreshToken(req.Context(), token)
 	if err != nil {
 		fmt.Printf("revokeHandler: error revoking token: %v", err)
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
@@ -330,7 +331,7 @@ func (cfg *apiConfig) revokeHandler(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (cfg *apiConfig) webhooksHandler(w http.ResponseWriter, req *http.Request) {
+func (app *App) webhooksHandler(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
 		Event string `json:"event"`
 		Data  struct {
@@ -347,14 +348,14 @@ func (cfg *apiConfig) webhooksHandler(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	headerKey, err := cfg.auth.GetAPIKey(req.Header)
+	headerKey, err := app.auth.GetAPIKey(req.Header)
 	if err != nil {
 		fmt.Println(color.RedString("error getting API key from headers: %v", err))
 		respondWithError(w, http.StatusUnauthorized, "")
 		return
 	}
 
-	if headerKey != cfg.polkaKey {
+	if headerKey != app.polkaKey {
 		respondWithError(w, http.StatusUnauthorized, "")
 		return
 	}
@@ -368,7 +369,7 @@ func (cfg *apiConfig) webhooksHandler(w http.ResponseWriter, req *http.Request) 
 			fmt.Println(color.RedString("error parsing user ID: %v", err))
 		}
 
-		_, err = cfg.db.UpgradeToChirpyRed(req.Context(), userID)
+		_, err = app.db.UpgradeToChirpyRed(req.Context(), userID)
 		if err != nil {
 			fmt.Println(color.RedString("error upgrading to chirpy red: %v", err))
 			respondWithError(w, http.StatusNotFound, "")
@@ -378,7 +379,7 @@ func (cfg *apiConfig) webhooksHandler(w http.ResponseWriter, req *http.Request) 
 	}
 }
 
-func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Request) {
+func (app *App) createChirpHandler(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
 		Body string `json:"body"`
 	}
@@ -392,7 +393,7 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	userID, err := cfg.auth.Authorize(req.Header)
+	userID, err := app.auth.Authorize(req.Header)
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, "")
 	}
@@ -414,7 +415,7 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Reques
 		}
 		clean := strings.Join(sanitized, " ")
 
-		dbChirp, err := cfg.db.CreateChirp(req.Context(), database.CreateChirpParams{
+		dbChirp, err := app.db.CreateChirp(req.Context(), database.CreateChirpParams{
 			Body:   clean,
 			UserID: userID,
 		})
@@ -434,7 +435,7 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Reques
 	}
 }
 
-func (cfg *apiConfig) deleteChirpHandler(w http.ResponseWriter, req *http.Request) {
+func (app *App) deleteChirpHandler(w http.ResponseWriter, req *http.Request) {
 	chirpID, err := uuid.Parse(req.PathValue("chirpID"))
 	if err != nil {
 		fmt.Printf("deleteChirpHandler: error parsing chirp from endpoint: %v\n", err)
@@ -442,13 +443,13 @@ func (cfg *apiConfig) deleteChirpHandler(w http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	userID, err := cfg.auth.Authorize(req.Header)
+	userID, err := app.auth.Authorize(req.Header)
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, "")
 		return
 	}
 
-	dbChirp, err := cfg.db.GetChirp(req.Context(), chirpID)
+	dbChirp, err := app.db.GetChirp(req.Context(), chirpID)
 	if err != nil {
 		fmt.Println(color.RedString("deleteChirpHandler: error querying for chirp: %v\n", err))
 		respondWithError(w, http.StatusNotFound, "chirp not found")
@@ -460,7 +461,7 @@ func (cfg *apiConfig) deleteChirpHandler(w http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	err = cfg.db.DeleteChirp(req.Context(), chirpID)
+	err = app.db.DeleteChirp(req.Context(), chirpID)
 	if err != nil {
 		fmt.Println(color.RedString("error deleting chirp: %v", err))
 		respondWithError(w, http.StatusInternalServerError, "something went wrong")
@@ -470,7 +471,7 @@ func (cfg *apiConfig) deleteChirpHandler(w http.ResponseWriter, req *http.Reques
 	respondWithJSON(w, http.StatusNoContent, "")
 }
 
-func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, req *http.Request) {
+func (app *App) getChirpsHandler(w http.ResponseWriter, req *http.Request) {
 	aid := req.URL.Query().Get("author_id")
 	sortDir := req.URL.Query().Get("sort")
 	fmt.Println(color.YellowString("author_id ? %s", aid))
@@ -481,17 +482,17 @@ func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, req *http.Request)
 		userID, err := uuid.Parse(aid)
 		if err != nil {
 			fmt.Println(color.RedString("invalid author_id parameter: %v", aid))
-			dbChirps, err = cfg.db.GetAllChirps(req.Context())
+			dbChirps, err = app.db.GetAllChirps(req.Context())
 			if err != nil {
 				fmt.Printf("getChirpsHandler: error querying for chirps: %v\n", err)
 				respondWithError(w, http.StatusInternalServerError, "something went wrong")
 				return
 			}
 		} else {
-			dbChirps, err = cfg.db.GetChirpsByUserID(req.Context(), userID)
+			dbChirps, err = app.db.GetChirpsByUserID(req.Context(), userID)
 		}
 	} else {
-		dbc, err := cfg.db.GetAllChirps(req.Context())
+		dbc, err := app.db.GetAllChirps(req.Context())
 		if err != nil {
 			fmt.Printf("getChirpsHandler: error querying for chirps: %v\n", err)
 			respondWithError(w, http.StatusInternalServerError, "something went wrong")
@@ -517,7 +518,7 @@ func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, req *http.Request)
 	respondWithJSON(w, http.StatusOK, chirps)
 }
 
-func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, req *http.Request) {
+func (app *App) getChirpHandler(w http.ResponseWriter, req *http.Request) {
 	chirpID, err := uuid.Parse(req.PathValue("chirpID"))
 	if err != nil {
 		fmt.Printf("getChirpHandler: error parsing chirp from endpoint: %v\n", err)
@@ -525,7 +526,7 @@ func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	dbChirp, err := cfg.db.GetChirp(req.Context(), chirpID)
+	dbChirp, err := app.db.GetChirp(req.Context(), chirpID)
 	if err != nil {
 		fmt.Println(color.RedString("getChirpHandler: error querying for chirp: %v", err))
 		respondWithError(w, http.StatusNotFound, "chirp not found")
@@ -577,25 +578,4 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 
 	w.WriteHeader(code)
 	w.Write(data)
-}
-
-func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cfg.fileserverHits.Add(1)
-		next.ServeHTTP(w, r)
-	})
-}
-
-type RequestLogger struct {
-	handler http.Handler
-}
-
-func (l *RequestLogger) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	l.handler.ServeHTTP(w, r)
-	fmt.Println(color.MagentaString("%s %s %v", r.Method, r.URL.String(), time.Since(start)))
-}
-
-func NewRequestLogger(handlerToWrap http.Handler) *RequestLogger {
-	return &RequestLogger{handlerToWrap}
 }
