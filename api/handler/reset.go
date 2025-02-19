@@ -2,14 +2,17 @@ package handler
 
 import (
 	"net/http"
+	"sync/atomic"
+
+	"github.com/jacobshu/chirp/internal/core"
 )
 
-func (app *App) resetHandler(w http.ResponseWriter, req *http.Request) {
-	app.fileserverHits = atomic.Int32{}
-	if app.platform != "dev" {
-		respondWithError(w, http.StatusForbidden, "Forbidden")
+func (s *Service) ResetHandler(app *core.App, w http.ResponseWriter, req *http.Request) {
+	app.Metrics.Hits = atomic.Int32{}
+	if app.Environment != "dev" {
+		s.respond(w, http.StatusForbidden, nil)
 		return
 	} else {
-		app.db.Reset(req.Context())
+		app.DB.Reset(req.Context())
 	}
 }
