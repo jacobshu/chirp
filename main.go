@@ -63,36 +63,38 @@ func main() {
 		fmt.Println(color.RedString("error creating auth service: %v", err))
 	}
 
-	app := App{
-		DB:         dbQueries,
-		Enviroment: platform,
-		Auth:       *authService,
-		signingKey: key,
-		polkaKey:   polkaAPIKey,
-	}
-
-	handler, err := handler.NewHandlerService()
+	handlerService, err := handler.NewHandlerService()
 	if err != nil {
 		fmt.Println(color.RedString("error creating handler service: %v", err))
 	}
 
+	app := App{
+		DB:             dbQueries,
+		Enviroment:     platform,
+		Auth:           *authService,
+		signingKey:     key,
+		PolkaKey:       polkaAPIKey,
+		HandlerService: *handlerService,
+	}
+
+	fmt.Println("%v : %v", app.Enviroment, app.PolkaKey)
 	serveMux.HandleFunc("GET /api/healthz", healthHandler)
-	serveMux.HandleFunc("GET /api/chirps", app.getChirpsHandler)
-	serveMux.HandleFunc("GET /api/chirps/{chirpID}", app.getChirpHandler)
-	serveMux.HandleFunc("DELETE /api/chirps/{chirpID}", app.deleteChirpHandler)
-	serveMux.HandleFunc("POST /api/chirps", app.createChirpHandler)
-	serveMux.HandleFunc("POST /api/login", app.loginHandler)
-	serveMux.HandleFunc("POST /api/polka/webhooks", app.webhooksHandler)
-	serveMux.HandleFunc("POST /api/refresh", app.refreshHandler)
-	serveMux.HandleFunc("POST /api/revoke", app.revokeHandler)
-	serveMux.HandleFunc("POST /api/users", app.userHandler)
-	serveMux.HandleFunc("PUT /api/users", app.updateUserHandler)
+	// serveMux.HandleFunc("GET /api/chirps", app.getChirpsHandler)
+	// serveMux.HandleFunc("GET /api/chirps/{chirpID}", app.getChirpHandler)
+	// serveMux.HandleFunc("DELETE /api/chirps/{chirpID}", app.deleteChirpHandler)
+	// serveMux.HandleFunc("POST /api/chirps", app.createChirpHandler)
+	// serveMux.HandleFunc("POST /api/login", app.loginHandler)
+	// serveMux.HandleFunc("POST /api/polka/webhooks", app.webhooksHandler)
+	// serveMux.HandleFunc("POST /api/refresh", app.refreshHandler)
+	// serveMux.HandleFunc("POST /api/revoke", app.revokeHandler)
+	// serveMux.HandleFunc("POST /api/users", app.userHandler)
+	// serveMux.HandleFunc("PUT /api/users", app.updateUserHandler)
+	//
+	// serveMux.HandleFunc("GET /admin/metrics", app.metricsHandler)
+	// serveMux.HandleFunc("POST /admin/reset", app.resetHandler)
 
-	serveMux.HandleFunc("GET /admin/metrics", app.metricsHandler)
-	serveMux.HandleFunc("POST /admin/reset", app.resetHandler)
-
-	// fileServerHandler := http.StripPrefix("/app/", http.FileServer(http.Dir(".")))
-	// serveMux.Handle("/app/", middleware.middlewareMetricsInc(fileServerHandler))
+	fileServerHandler := http.StripPrefix("/app/", http.FileServer(http.Dir(".")))
+	serveMux.Handle("/app/", fileServerHandler)
 
 	if err := server.ListenAndServe(); err != nil {
 		fmt.Printf("error during serve: %v\n", err)
